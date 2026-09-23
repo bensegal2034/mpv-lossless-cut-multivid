@@ -359,65 +359,65 @@ local function cut_render()
 
 	log("Rendering cuts...")
 
-	local input = mp.get_property("path")
-	local filename = mp.get_property("filename")
+	-- sort cuts by start time and filename
+	table.sort(cuts, function(a, b)
+		if a.filename == b.filename then
+			return a.start_time < b.start_time
+		end
 
-	local input_info = mp.utils.file_info(input)
+		return a.filename < b.filename
+	end)
 
-	local is_stream = input_info == nil
-
+	local cut_paths = {}
 	local outdir
 	if options.output_dir == "@cwd" or is_stream then
 		outdir = mp.utils.getcwd()
 	else
-		input_dir = mp.utils.split_path(input)
+		input_dir = mp.utils.split_path(cuts[1].path)
 		outdir = join_paths(input_dir, options.output_dir)
 	end
-
-	-- create output directory if needed
-	if not ensure_directory_exists(outdir) then
-		log("Failed to create output directory")
-		return
-	end
-
-	local filename_noext, ext = "", ""
-	local cache_offset = 0
-
-	local temp_cache_file_name = join_paths(outdir, "cache-dump.mkv")
-
-	if not is_stream then
-		filename_noext, ext = filename:match("^(.*)(%.[^%.]+)$")
-	else
-		filename_noext = sanitize_filename(mp.get_property("media-title"))
-		ext = ".mkv"
-
-		input = temp_cache_file_name
-
-		local offset = dump_cache(input)
-		if not offset then
-			log("Failed to dump stream cache")
-			return
-		end
-
-		cache_offset = offset
-	end
-
-	input_info = mp.utils.file_info(input)
-
-	if not input_info then
-		log("Failed to read input file info")
-	end
-
-	-- sort cuts by start time
-	table.sort(cuts, function(a, b)
-		return a.start_time < b.start_time
-	end)
-
-	local cut_paths = {}
 
 	for i, cut in ipairs(cuts) do
 		if cut.end_time then
 			local duration = cut.end_time - cut.start_time
+			local input = cut.path
+			local filename = cut.filename
+			local input_info = mp.utils.file_info(input)
+			local is_stream = input_info == nil
+
+			-- create output directory if needed
+			if not ensure_directory_exists(outdir) then
+				log("Failed to create output directory")
+				return
+			end
+
+			local filename_noext, ext = "", ""
+			local cache_offset = 0
+
+			local temp_cache_file_name = join_paths(outdir, "cache-dump.mkv")
+
+			if not is_stream then
+				filename_noext, ext = filename:match("^(.*)(%.[^%.]+)$")
+			else
+				filename_noext = sanitize_filename(cut.media_title)
+				ext = ".mkv"
+
+				input = temp_cache_file_name
+
+				local offset = dump_cache(input)
+				if not offset then
+					log("Failed to dump stream cache")
+					return
+				end
+
+				cache_offset = offset
+			end
+
+			input_info = mp.utils.file_info(input)
+
+			if not input_info then
+				log("Failed to read input file info")
+			end
 
 			local cut_name = string.format(
 				"(%s) %s (%s - %s)%s",
@@ -444,8 +444,7 @@ local function cut_render()
 	end
 
 	if #cut_paths > 1 and options.multi_cut_mode == "merge" then
-		local merge_name = string.format("(%d merged cuts) %s%s", #cut_paths, filename_noext, ext)
-
+		local merge_name = string.format("(%d merged cuts) %s", #cut_paths, cuts[1].filename)
 		local merge_path = join_paths(outdir, merge_name)
 
 		log("Merging cuts...")
@@ -486,8 +485,17 @@ end
 
 local function cut_set_start(start_time)
 	local last_cut = cuts[#cuts]
+	local path = mp.get_property("path")
+	local filename = mp.get_property("filename")
+	local media_title = mp.get_property("media-title")
+
 	if not last_cut or last_cut.end_time then
-		local new_cut = { start_time = start_time }
+		local new_cut = { 
+			start_time = start_time,
+			path = path,
+			filename = filename,
+			media_title = media_title
+		}
 		table.insert(cuts, new_cut)
 		log(string.format("[cut %d] Set start time: %.2fs", #cuts, start_time))
 	else
@@ -535,9 +543,5 @@ mp.add_key_binding("ctrl+g", "cut_toggle_mode", cut_toggle_mode)
 mp.add_key_binding("ctrl+h", "cut_clear", cut_clear)
 
 mp.add_key_binding("r", "cut_render", cut_render)
-
-mp.register_event("end-file", function()
-	cut_clear(true)
-end)
 
 print("mpv-lossless-cut loaded")
