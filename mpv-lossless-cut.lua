@@ -265,6 +265,20 @@ local function render_cut(input, outpath, start, duration, input_mtime)
 	if options.lossless then
 		table.insert(args, "-c")
 		table.insert(args, "copy")
+	else
+		-- vf runs on cpu, encode runs on gpu
+		table.insert(args, "-vf")
+		table.insert(args, "tblend=all_mode=average,fps=60,scale=1920:1080:flags=lanczos")
+		table.insert(args, "-c:v")
+		table.insert(args, "h264_nvenc")
+		table.insert(args, "-preset")
+		table.insert(args, "p7")
+		table.insert(args, "-cq")
+		table.insert(args, "22")
+
+		-- don't re encode audio
+		table.insert(args, "-c:a")
+		table.insert(args, "copy")
 	end
 
 	table.insert(args, outpath)
@@ -469,6 +483,11 @@ local function cut_toggle_mode()
 	log(string.format('Cut mode set to "%s"', options.multi_cut_mode))
 end
 
+local function cut_toggle_lossless()
+	options.lossless = not(options.lossless)
+	log(string.format('Lossless: %s', options.lossless))
+end
+
 local function cut_clear(silent)
 	if next(cuts) then
 		cuts = {}
@@ -543,5 +562,6 @@ mp.add_key_binding("ctrl+g", "cut_toggle_mode", cut_toggle_mode)
 mp.add_key_binding("ctrl+h", "cut_clear", cut_clear)
 
 mp.add_key_binding("r", "cut_render", cut_render)
+mp.add_key_binding("ctrl+r", "cut_toggle_lossless", cut_toggle_lossless)
 
 print("mpv-lossless-cut loaded")
