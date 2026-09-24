@@ -218,16 +218,18 @@ local function set_file_times(file_path, mtime)
 end
 
 -- ffmpeg operations
-local function run_ffmpeg(args)
+local function run_ffmpeg(args, use_output)
 	local base_args = {
 		"ffmpeg",
-		-- hide output
-		"-nostdin",
-		"-loglevel",
-		"error",
 		-- overwrite existing files
 		"-y",
 	}
+
+	if not(use_output) then
+		table.insert(base_args, "-nostdin")
+		table.insert(base_args, "-loglevel")
+		table.insert(base_args, "error")
+	end
 
 	-- add args to base
 	for _, arg in ipairs(args) do
@@ -240,6 +242,8 @@ local function run_ffmpeg(args)
 	local result = mp.utils.subprocess({
 		args = base_args,
 		cancellable = false,
+		capture_stdout = true,
+        capture_stderr = true,
 	})
 
 	return result.status == 0, result.stdout, result.stderr
@@ -254,9 +258,11 @@ local function render_cut(input, outpath, start, duration, input_mtime)
 		tostring(duration),
 		"-i",
 		input,
-		-- copy all input streams
+		-- copy first audio and video stream
 		"-map",
-		"0",
+		"0:v:0?",
+		"-map",
+		"0:a:0?",
 		-- shift timestamps so they start at 0
 		"-avoid_negative_ts",
 		"make_zero",
@@ -266,9 +272,35 @@ local function render_cut(input, outpath, start, duration, input_mtime)
 		table.insert(args, "-c")
 		table.insert(args, "copy")
 	else
+		-- determine best crop for video
+		local cropArgs = {
+			"-ss", tostring(start),
+			"-t", tostring(duration),
+			"-i", input,
+			"-vf", "cropdetect=limit=24:round=2:reset=0",
+			"-f", "null",
+			"-",
+		}
+		local success, stdout, stderr = run_ffmpeg(cropArgs, true)
+
+		-- find the most commonly occurring crop string in the output
+		crops = {}
+		bestCrop = nil
+		bestCropCount = 0
+
+		for crop in stderr:gmatch("crop=(%d+:%d+:%d+:%d+)") do
+			crops[crop] = (crops[crop] or 0) + 1
+			if crops[crop] > bestCropCount then
+				bestCrop = crop
+				bestCropCount = crops[crop]
+			end
+		end
+
 		-- vf runs on cpu, encode runs on gpu
 		table.insert(args, "-vf")
-		table.insert(args, "tblend=all_mode=average,fps=60,scale=1920:1080:flags=lanczos")
+		table.insert(args, "crop=" .. bestCrop .. ",tblend=all_mode=average,fps=60,scale=1920:1080:flags=lanczos")
+		table.insert(args, "-fps_mode")
+		table.insert(args, "cfr")
 		table.insert(args, "-c:v")
 		table.insert(args, "h264_nvenc")
 		table.insert(args, "-preset")
@@ -276,14 +308,19 @@ local function render_cut(input, outpath, start, duration, input_mtime)
 		table.insert(args, "-cq")
 		table.insert(args, "22")
 
-		-- don't re encode audio
 		table.insert(args, "-c:a")
-		table.insert(args, "copy")
+		table.insert(args, "aac")
+		table.insert(args, "-b:a")
+		table.insert(args, "192k")
+		table.insert(args, "-ar")
+		table.insert(args, "48000")
+		table.insert(args, "-ac")
+		table.insert(args, "2")
 	end
 
 	table.insert(args, outpath)
 
-	local success = run_ffmpeg(args)
+	local success = run_ffmpeg(args, false)
 
 	if success and input_mtime then
 		set_file_times(outpath, input_mtime)
@@ -325,7 +362,7 @@ local function merge_cuts(temp_dir, filepaths, outpath, input_mtime)
 		"-map",
 		"0",
 		outpath,
-	})
+	}, false)
 
 	os.remove(merge_file)
 
